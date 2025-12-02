@@ -81,35 +81,13 @@ def ProjectDataLoader(digits_dir="../digits"):
         # open image and force it to grayscale("L") to match MINST format
         img = Image.open(png_path).convert("L")
         # ensure that the size is actualy 28 x 28
+        # maybe this could be a problem but i dont think so, i think shen made sure
+        # maybe change this so it confirms that its 28x28 instead of tryign to resize it
+        # again if its not
         img = img.resize((28, 28))
 
         # convert to flost32 np array
         arr = np.array(img, dtype=np.float32)
-        # if the mean intensity is high, its probably white background so flip it
-        if arr.mean() > 128:
-            arr = 255.0 - arr
-        
-        # find the pixels that have the "ink"
-        # crop to it and then resize
-        mask = arr > 30
-        if mask.any():
-            ys, xs = np.where(mask)
-            ymin, ymax = ys.min(), ys.max()
-            xmin, xmax = xs.min(), xs.max()
-
-            # Crop to bounding box
-            cropped = arr[ymin:ymax+1, xmin:xmax+1]
-
-            # Resize cropped digit back to 20x20 (like MNIST-ish) and pad to 28x28
-            pil_cropped = Image.fromarray(cropped.astype(np.uint8), mode="L")
-            pil_cropped = pil_cropped.resize((20, 20))
-
-            centered = np.zeros((28, 28), dtype=np.float32)
-            y_off = (28 - 20) // 2
-            x_off = (28 - 20) // 2
-            centered[y_off:y_off+20, x_off:x_off+20] = np.array(pil_cropped, dtype=np.float32)
-
-            arr = centered
         
         image_list.append(arr)
         label_list.append(label)
@@ -154,8 +132,10 @@ class ProjectDigitsDataset(torch.utils.data.Dataset):
 # later tune: Hidden sizes, Dropout rate, Learning rate, Batch size, Number of epochs
 # mlp model architecture: fuuly connected feed forward network
 # - input: 28*28 = 784 features (flattened image)
-# - hidden layers: 256, 128, 64 with ReLU - modified to 512, 256, 128
-# - dropout: 0.2 to reduce the amount of overfitting
+# - hidden layers: 256, 128, 64 w/ 0.3 (81%) with ReLU - modified to 512, 256, 128 (86%) w/ 0.3
+# - dropout: 0.2 to reduce the amount of overfitting (86%) w/ above modified
+# triend with 512, 256, 128, 64, with dropout = 0.2% and got 84%
+# tried with same as above with 0.3% and got 84%
 # - output: 10 logits (one per digit)
 class MLP(nn.Module):
 
@@ -165,7 +145,7 @@ class MLP(nn.Module):
         self.fc2 = nn.Linear(512, 256)
         self.fc3 = nn.Linear(256, 128)
         self.fc4 = nn.Linear(128, 10)
-        self.dropout = nn.Dropout(0.3)
+        self.dropout = nn.Dropout(0.2)
         
     def forward(self, x):
         # flatten from (batch, 1, 28, 28) to (batch, 784)
@@ -231,10 +211,13 @@ def main():
     # invariance liek oratiations and shifts it wouldnt see witht he regular MNISt data that it
     # would in out class data
     # use these same transforms for both testing MNIST and class data so its consistent for the MLP
+    # increasing translation form 0.1 to 0.2 went form 85.57% to 86.43% w/ 10 deg
+    # smae thing with 15% went from 86.43% to 86.07%
+    # tried with 0.15 translation and 10 deg and got 85.71%
     train_transform = transforms.Compose([
         transforms.RandomAffine(
             degrees=10,
-            translate=(0.1, 0.1)
+            translate=(0.2, 0.2)
         ),
         transforms.ToTensor(),
         transforms.Normalize((0.5,), (0.5,))
@@ -277,7 +260,8 @@ def main():
     # initalize model, loss, and optimizer
     # - MLP() is the fully connected network
     # - CrossEntropyLoss = softmax + log loss
-    # - Adam optimizer with lr=1e-3 (this is pretty common) - modified to 5e-4
+    # - Adam optimizer with lr=1e-3 (this is pretty common) gets 
+    # modified to 5e-4 get 85% no difference from 1e-3 except more consistnent
     model = MLP().to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=5e-4)
@@ -287,7 +271,10 @@ def main():
     # - for each epoch: iterate iver all the training batches
     # - compute loss, backprop, and update weights
     # - track and print the average training loss per epoch: shows us if the model is improving
-    epochs = 20
+    # 15 eopchs seems to be a good number, doesnt overfit and doesnt underfit (85%),
+    # when i tried anything smaller it was slgihtly underfit but not too bad and when i
+    # trien 20 it was uncessesary and did not improve the results (i also tried 30 and same thing)
+    epochs = 15
     train_losses = []
 
     for epoch in range(1, epochs + 1):
@@ -321,15 +308,13 @@ def main():
 
     print("Training complete.")
 
-    """
+    
     # plot the loss just too see it dropping visually even though its obvious from print
-
     plt.plot(train_losses)
     plt.xlabel("Epoch")
     plt.ylabel("Training loss")
     plt.title("MLP training loss on MNIST")
-    plt.show()
-    """
+    plt.savefig("loss", dpi=150)
 
     # Evaluate the trained MLP on the MNISt test set
     # this shows us the baseline performance on the stndardized data
@@ -396,7 +381,7 @@ def main():
             p = probs_all[i]
             true_label = lbls_array[i]
             pred_label = preds_array[i]
-            print(f"Image {i} --- True: {true_label}, Predicted: {pred_label}")
+            #print(f"Image {i} --- True: {true_label}, Predicted: {pred_label}")
             filename = f"{output_dir}/digit_{i}_true{true_label}_pred{pred_label}.png"
             plot_prediction(img_t, p, filename)
 
