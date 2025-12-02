@@ -11,17 +11,6 @@ Differences from Dylans code:
   * i use a Dataset and DataLoader fro the class digits so i can use the same
     evaluation code for the class digits that is used for MNIST
   * added dropout and regularization
-- we can still add:
-  * preprocessing for the class digits so they look more like MNISt
-    - centering the digits and resizing them (cropping)
-    - make cure they are black background and white digit even tho i think shen did this
-  * add more hidden units in the hidden layer
-  * train for more epochs
-  * decrease the learnign rate
--- these are all things we should vary and then present how they resulted in over/underfitting
-   or how they agve us the perfect medium for getting the best accuracy
-  * change the transform for just the training data so it accepts some rotations/shifts during
-    training so the model isnt so sensitive to this when testing
 """
 
 import torch, time 
@@ -96,6 +85,32 @@ def ProjectDataLoader(digits_dir="../digits"):
 
         # convert to flost32 np array
         arr = np.array(img, dtype=np.float32)
+        # if the mean intensity is high, its probably white background so flip it
+        if arr.mean() > 128:
+            arr = 255.0 - arr
+        
+        # find the pixels that have the "ink"
+        # crop to it and then resize
+        mask = arr > 30
+        if mask.any():
+            ys, xs = np.where(mask)
+            ymin, ymax = ys.min(), ys.max()
+            xmin, xmax = xs.min(), xs.max()
+
+            # Crop to bounding box
+            cropped = arr[ymin:ymax+1, xmin:xmax+1]
+
+            # Resize cropped digit back to 20x20 (like MNIST-ish) and pad to 28x28
+            pil_cropped = Image.fromarray(cropped.astype(np.uint8), mode="L")
+            pil_cropped = pil_cropped.resize((20, 20))
+
+            centered = np.zeros((28, 28), dtype=np.float32)
+            y_off = (28 - 20) // 2
+            x_off = (28 - 20) // 2
+            centered[y_off:y_off+20, x_off:x_off+20] = np.array(pil_cropped, dtype=np.float32)
+
+            arr = centered
+        
         image_list.append(arr)
         label_list.append(label)
 
@@ -139,18 +154,18 @@ class ProjectDigitsDataset(torch.utils.data.Dataset):
 # later tune: Hidden sizes, Dropout rate, Learning rate, Batch size, Number of epochs
 # mlp model architecture: fuuly connected feed forward network
 # - input: 28*28 = 784 features (flattened image)
-# - hidden layers: 256, 128, 64 with ReLU
+# - hidden layers: 256, 128, 64 with ReLU - modified to 512, 256, 128
 # - dropout: 0.2 to reduce the amount of overfitting
 # - output: 10 logits (one per digit)
 class MLP(nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.fc1 = nn.Linear(28*28, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.fc3 = nn.Linear(128, 64)
-        self.fc4 = nn.Linear(64, 10)
-        self.dropout = nn.Dropout(0.2)
+        self.fc1 = nn.Linear(28*28, 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, 128)
+        self.fc4 = nn.Linear(128, 10)
+        self.dropout = nn.Dropout(0.3)
         
     def forward(self, x):
         # flatten from (batch, 1, 28, 28) to (batch, 784)
@@ -212,8 +227,19 @@ def main():
     # define transforms for image preprocessing:
     # - ToTensor: [0, 255] -> [0, 1]
     # - Normalize(mean=0.5, std=0.5): [0, 1] -> [-1, 1]
-    # use these same transforms for both MNISt and class data so its consistent for the MLP
-    transform = transforms.Compose([
+    # use a different trasnform for triaing than for testing so you can let the model see soem
+    # invariance liek oratiations and shifts it wouldnt see witht he regular MNISt data that it
+    # would in out class data
+    # use these same transforms for both testing MNIST and class data so its consistent for the MLP
+    train_transform = transforms.Compose([
+        transforms.RandomAffine(
+            degrees=10,
+            translate=(0.1, 0.1)
+        ),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,), (0.5,))
+    ])
+    test_transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.5,), (0.5,))
     ])
@@ -223,7 +249,7 @@ def main():
             root="~/MNIST_data",
             train=True,
             download=True,
-            transform=transform
+            transform=train_transform
     )
     trainloader = torch.utils.data.DataLoader(
             trainset,
@@ -238,7 +264,7 @@ def main():
             root="~/MNIST_data",
             train=False,
             download=True,
-            transform=transform
+            transform=test_transform
     )
     testloader = torch.utils.data.DataLoader(
             testset,
@@ -251,17 +277,17 @@ def main():
     # initalize model, loss, and optimizer
     # - MLP() is the fully connected network
     # - CrossEntropyLoss = softmax + log loss
-    # - Adam optimizer with lr=1e-3 (this is pretty common)
+    # - Adam optimizer with lr=1e-3 (this is pretty common) - modified to 5e-4
     model = MLP().to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = optim.Adam(model.parameters(), lr=5e-4)
 
     # training loop:
     # - run for fixed number of epochs (we should change this and graph results)
     # - for each epoch: iterate iver all the training batches
     # - compute loss, backprop, and update weights
     # - track and print the average training loss per epoch: shows us if the model is improving
-    epochs = 10
+    epochs = 20
     train_losses = []
 
     for epoch in range(1, epochs + 1):
@@ -313,12 +339,10 @@ def main():
 
     # load the class digits from "../digits" and check shapes/labels
     images_np, labels_np = ProjectDataLoader("../digits")
-    print("Project digits shapes:", images_np.shape, labels_np.shape)
-    print("Label distribution (digit, count):", np.unique(labels_np, return_counts=True))
 
     # build Dataset and DataLoader for the class digits using the same transforms as MNIST
     # now we cna reuse the same evaluation code that we sued for MNIST
-    project_dataset = ProjectDigitsDataset("../digits", transform=transform)
+    project_dataset = ProjectDigitsDataset("../digits", transform=test_transform)
     project_loader = torch.utils.data.DataLoader(
         project_dataset,
         batch_size=64,
@@ -326,8 +350,6 @@ def main():
         num_workers=1,
         pin_memory=True
     )
-
-    print("Project digits dataset size:", len(project_dataset))
 
     """
     accuracy is lower on real handwritten digits:
