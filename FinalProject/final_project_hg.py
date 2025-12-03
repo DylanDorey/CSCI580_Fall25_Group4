@@ -88,7 +88,23 @@ def ProjectDataLoader(digits_dir="../digits"):
 
         # convert to flost32 np array
         arr = np.array(img, dtype=np.float32)
-        
+
+        max_pix = arr.max()
+        foreground_pixels = (arr > 60).sum()
+        contrast = arr.max() - arr.min()
+
+        if max_pix < 70:
+            print(f"Skipping {png_path.name}: too faint (max={max_pix})")
+            continue
+
+        if foreground_pixels < 20:
+            print(f"Skipping {png_path.name}: almost blank ({foreground_pixels} bright pixels)")
+            continue
+
+        if contrast < 30:
+            print(f"Skipping {png_path.name}: low contrast (range={contrast})")
+            continue
+
         image_list.append(arr)
         label_list.append(label)
 
@@ -264,7 +280,7 @@ def main():
     # modified to 5e-4 get 85% no difference from 1e-3 except more consistnent
     model = MLP().to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=5e-4)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
     # training loop:
     # - run for fixed number of epochs (we should change this and graph results)
