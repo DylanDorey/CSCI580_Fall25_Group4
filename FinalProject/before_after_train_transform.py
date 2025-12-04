@@ -41,7 +41,9 @@ base_transform = transforms.ToTensor()
 aug_transform = transforms.Compose([
     transforms.RandomAffine(
         degrees=10,
-        translate=(0.2, 0.2)
+        translate=(0.15, 0.15),
+        scale=(0.5, 1.5),
+        shear=10
     ),
     transforms.ToTensor(),
     transforms.Normalize((0.5,), (0.5,))

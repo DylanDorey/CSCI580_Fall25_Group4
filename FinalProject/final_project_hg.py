@@ -47,6 +47,23 @@ def plot_prediction(image_tensor, probs, filename):
     plt.savefig(filename, dpi=150)
     plt.close(fig)
 
+def save_confusion_matrix(cm, filename, title):
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(cm, interpolation="nearest")
+    ax.set_title(title)
+    ax.set_xlabel("Predicted label")
+    ax.set_ylabel("True label")
+    ax.set_xticks(range(10))
+    ax.set_yticks(range(10))
+    ax.set_xticklabels(range(10))
+    ax.set_yticklabels(range(10))
+    plt.colorbar(im, ax=ax)
+    plt.tight_layout()
+    plt.savefig(filename, dpi=200)
+    plt.close(fig)
+    print(f"Saved confusion matrix to {filename}")
+
+
 # i am running on the A100
 # use the GPU here if it is available, if not use CPU like usual
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -88,7 +105,7 @@ def ProjectDataLoader(digits_dir="../digits"):
 
         # convert to flost32 np array
         arr = np.array(img, dtype=np.float32)
-
+        
         max_pix = arr.max()
         foreground_pixels = (arr > 60).sum()
         contrast = arr.max() - arr.min()
@@ -179,11 +196,15 @@ class MLP(nn.Module):
 # Evaluation helper used for both MNIST and class data
 # computes average loss and accuracy over the given DataLoader
 # keep this funcitong eneric by being able to pass in "criterion"
-def evaluate(model, dataloader, device, criterion):
+def evaluate(model, dataloader, device, criterion, compute_confusion=False, num_classes=10):
     model.eval()
     correct = 0
     total = 0
     running_loss = 0.0
+
+    cm = None
+    if compute_confusion:
+        cm = np.zeros((num_classes, num_classes), dtype=np.int64)
 
     with torch.no_grad():
         for images, labels in dataloader:
@@ -202,13 +223,27 @@ def evaluate(model, dataloader, device, criterion):
             correct += (preds == labels).sum().item()
             total += labels.size(0)
 
+            if compute_confusion:
+                # move to CPU and numpy for counting
+                true_np = labels.cpu().numpy()
+                pred_np = preds.cpu().numpy()
+                for t, p in zip(true_np, pred_np):
+                    cm[t, p] += 1
+
     # avoid divion by zero is dataloader is empty
     if total == 0:
-        return float("nan"), float("nan")
+        if compute_confusion:
+            return float("nan"), float("nan"), cm
+        else:
+            return float("nan"), float("nan")
 
     avg_loss = running_loss / total
     accuracy = correct / total
-    return avg_loss, accuracy
+
+    if compute_confusion:
+        return avg_loss, accuracy, cm
+    else:
+        return avg_loss, accuracy
 
 # main training and evaluation calls
 # Main funciton:
@@ -233,7 +268,9 @@ def main():
     train_transform = transforms.Compose([
         transforms.RandomAffine(
             degrees=10,
-            translate=(0.2, 0.2)
+            translate=(0.2, 0.2),
+            scale=(0.5, 1.5),
+            shear=10
         ),
         transforms.ToTensor(),
         transforms.Normalize((0.5,), (0.5,))
@@ -335,7 +372,7 @@ def main():
     # Evaluate the trained MLP on the MNISt test set
     # this shows us the baseline performance on the stndardized data
     # then we will have to compare this to the class digits performance 
-    test_loss, test_acc = evaluate(model, testloader, device, criterion)
+    test_loss, test_acc, test_cm = evaluate(model, testloader, device, criterion, compute_confusion=True)
     print(f"MNIST Test loss: {test_loss:.4f}, accuracy: {100*test_acc:.2f}%")
 
     # load the class digits from "../digits" and check shapes/labels
@@ -365,8 +402,11 @@ def main():
     and Dataset is small and small test datasets produce bad accuracy
     """
     # evaluate the smae trained MLP on the class digits
-    proj_loss, proj_acc = evaluate(model, project_loader, device, criterion)
+    proj_loss, proj_acc, proj_cm = evaluate(model, project_loader, device, criterion, compute_confusion=True)
     print(f"Class handwritten digits - loss: {proj_loss:.4f}, accuracy: {100*proj_acc:.2f}%")
+
+    save_confusion_matrix(test_cm, "mnist_confusion.png", "MNIST Test Confusion Matrix")
+    save_confusion_matrix(proj_cm, "project_confusion.png", "Class Digits Confusion Matrix")
 
     # analysis/visualization:
     # - build a tensor of all project images
