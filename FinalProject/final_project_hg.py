@@ -40,7 +40,8 @@ def plot_prediction(image_tensor, probs, filename):
     ax2.barh(y_pos, probs)
     ax2.set_yticks(y_pos)
     ax2.set_yticklabels([str(d) for d in range(10)])
-    ax2.set_xlim(0, 1)
+ 
+ ax2.set_xlim(0, 1)
     ax2.set_title("Class Probability")
 
     plt.tight_layout()
