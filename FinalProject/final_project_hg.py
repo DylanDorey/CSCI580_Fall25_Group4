@@ -1,18 +1,3 @@
-"""
-Differences from Dylans code:
-- i kept the overall design of:
-  * an mlp with 3 hidden layers
-  * a ProjectDataLoader that reads pngs and extracts labels fromt he filenames
-  * visualizing the predicitons like the professor does witht he image and bar chart
-- i changed a couple things:
-  * relative "../digits" path so we can all use the code
-  * i have additions so i can run the code on the schoole A100 machine,
-    but should run fine still locally
-  * i use a Dataset and DataLoader fro the class digits so i can use the same
-    evaluation code for the class digits that is used for MNIST
-  * added dropout and regularization
-"""
-
 import torch, time 
 from torch import nn, optim
 from torchvision import datasets, transforms
@@ -21,36 +6,12 @@ from pathlib import Path
 from PIL import Image
 import numpy as np
 
-# visualization helper adapted from Dylans code:
-# - given a single image tensor and the probability vector over each digit:
-# -- plot the image on the left
-# -- plot the horizontal bar chart of probabilities on the right
-def plot_prediction(image_tensor, probs, filename):
-    
-    image_np = image_tensor.squeeze().cpu().numpy()
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-
-    # left: the digit image
-    ax1.imshow(image_np, cmap="viridis")
-    ax1.axis("off")
-
-    # right: Probability bars
-    y_pos = np.arange(10)
-    ax2.barh(y_pos, probs)
-    ax2.set_yticks(y_pos)
-    ax2.set_yticklabels([str(d) for d in range(10)])
- 
- ax2.set_xlim(0, 1)
-    ax2.set_title("Class Probability")
-
-    plt.tight_layout()
-    plt.savefig(filename, dpi=150)
-    plt.close(fig)
-
 def save_confusion_matrix(cm, filename, title):
     fig, ax = plt.subplots(figsize=(6, 5))
-    im = ax.imshow(cm, interpolation="nearest")
+    
+    # white -> blue colormap
+    im = ax.imshow(cm, interpolation="nearest", cmap="Blues")
+    
     ax.set_title(title)
     ax.set_xlabel("Predicted label")
     ax.set_ylabel("True label")
@@ -58,7 +19,25 @@ def save_confusion_matrix(cm, filename, title):
     ax.set_yticks(range(10))
     ax.set_xticklabels(range(10))
     ax.set_yticklabels(range(10))
+
+    # Add colorbar
     plt.colorbar(im, ax=ax)
+
+    # Annotate each cell with the integer value
+    # threshold is used to decide text color (white on dark blue, black on light blue)
+    thresh = cm.max() / 2.0 if cm.max() > 0 else 0.5
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            value = cm[i, j]
+            ax.text(
+                j, i,
+                str(value),
+                ha="center",
+                va="center",
+                color="white" if value > thresh else "black",
+                fontsize=9,
+            )
+
     plt.tight_layout()
     plt.savefig(filename, dpi=200)
     plt.close(fig)
@@ -106,7 +85,7 @@ def ProjectDataLoader(digits_dir="../digits"):
 
         # convert to flost32 np array
         arr = np.array(img, dtype=np.float32)
-        
+
         max_pix = arr.max()
         foreground_pixels = (arr > 60).sum()
         contrast = arr.max() - arr.min()
@@ -115,7 +94,7 @@ def ProjectDataLoader(digits_dir="../digits"):
             print(f"Skipping {png_path.name}: too faint (max={max_pix})")
             continue
 
-        if foreground_pixels < 20:
+        if foreground_pixels < 10:
             print(f"Skipping {png_path.name}: almost blank ({foreground_pixels} bright pixels)")
             continue
 
@@ -268,10 +247,10 @@ def main():
     # tried with 0.15 translation and 10 deg and got 85.71%
     train_transform = transforms.Compose([
         transforms.RandomAffine(
-            degrees=10,
-            translate=(0.2, 0.2),
-            scale=(0.5, 1.5),
-            shear=10
+            degrees=5,
+            translate=(0.1, 0.1),
+            scale=(0.8, 1.2),
+            shear=5
         ),
         transforms.ToTensor(),
         transforms.Normalize((0.5,), (0.5,))
@@ -318,7 +297,7 @@ def main():
     # modified to 5e-4 get 85% no difference from 1e-3 except more consistnent
     model = MLP().to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
     # training loop:
     # - run for fixed number of epochs (we should change this and graph results)
@@ -362,14 +341,6 @@ def main():
 
     print("Training complete.")
 
-    
-    # plot the loss just too see it dropping visually even though its obvious from print
-    plt.plot(train_losses)
-    plt.xlabel("Epoch")
-    plt.ylabel("Training loss")
-    plt.title("MLP training loss on MNIST")
-    plt.savefig("loss", dpi=150)
-
     # Evaluate the trained MLP on the MNISt test set
     # this shows us the baseline performance on the stndardized data
     # then we will have to compare this to the class digits performance 
@@ -390,57 +361,12 @@ def main():
         pin_memory=True
     )
 
-    """
-    accuracy is lower on real handwritten digits:
-    - the classes digits vary a lot
-    - MNIST is very standardized and our handwriting is not
-    - MLP struggles with image distortions
-    - No translation invariance
-    - No convolutional filters
-    --> So off center digits or unusual writing styles confuse it
-
-    Some submitted images are low quality/too faint/weird background/wrong color inversion/not thick
-    and Dataset is small and small test datasets produce bad accuracy
-    """
     # evaluate the smae trained MLP on the class digits
     proj_loss, proj_acc, proj_cm = evaluate(model, project_loader, device, criterion, compute_confusion=True)
     print(f"Class handwritten digits - loss: {proj_loss:.4f}, accuracy: {100*proj_acc:.2f}%")
 
     save_confusion_matrix(test_cm, "mnist_confusion.png", "MNIST Test Confusion Matrix")
     save_confusion_matrix(proj_cm, "project_confusion.png", "Class Digits Confusion Matrix")
-
-    # analysis/visualization:
-    # - build a tensor of all project images
-    # - run the model once to get logits
-    # - convert logits to probabilities using softmax
-    # - for each image, print true vs predicted and show the probability bar chart and  image
-    if len(project_dataset) > 0:
-        
-        # build a single big batch of all project images
-        imgs_tensor = torch.stack([project_dataset[i][0] for i in range(len(project_dataset))])
-        lbls_array = np.array([project_dataset[i][1] for i in range(len(project_dataset))])
-
-        imgs_tensor_device = imgs_tensor.to(device)
-        with torch.no_grad():
-            logits_all = model(imgs_tensor_device)
-            probs_all = torch.softmax(logits_all, dim=1).cpu().numpy()
-
-        preds_array = probs_all.argmax(axis=1)
-        overall_correct = (preds_array == lbls_array).sum()
-        print(f"[Per-image check] Team Images Accuracy: {overall_correct / len(lbls_array):.2f}")
-
-        # plot a some examples
-        output_dir = "predictions"
-        Path(output_dir).mkdir(exist_ok=True)
-        
-        for i in range(len(imgs_tensor)):
-            img_t = imgs_tensor[i]
-            p = probs_all[i]
-            true_label = lbls_array[i]
-            pred_label = preds_array[i]
-            #print(f"Image {i} --- True: {true_label}, Predicted: {pred_label}")
-            filename = f"{output_dir}/digit_{i}_true{true_label}_pred{pred_label}.png"
-            plot_prediction(img_t, p, filename)
 
 # entry point
 if __name__ == "__main__":
