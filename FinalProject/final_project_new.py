@@ -633,7 +633,18 @@ def main():
 
     print("--------------------------------------------------------------")
     print("\nTraining model on MNIST train set...\n")
-    _ = train_model(model, trainloader, device, criterion, optimizer, epochs)
+    train_losses = train_model(model, trainloader, device, criterion, optimizer, epochs)
+
+    # Plot training loss vs epoch for THIS single run
+    plt.figure(figsize=(8, 5))
+    plt.plot(range(1, len(train_losses) + 1), train_losses, marker="o", linewidth=2)
+    plt.title("Training Loss vs Epoch (single run)", fontsize=14)
+    plt.xlabel("Epoch", fontsize=12)
+    plt.ylabel("Training Loss (Cross-Entropy)", fontsize=12)
+    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.xticks(range(1, epochs + 1))
+
+    plt.show()
 
     # ---------------------------- Evaluate on MNIST test set -------------------------------- #
     # - baseline evaluation ------------------------------------------------------------------ #
